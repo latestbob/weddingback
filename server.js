@@ -2,39 +2,67 @@ const express = require('express');
 const app = express();
 const nodemailer = require('nodemailer');
 const cors = require('cors');
+const { BullAdapter } = require('@bull-board/api/bullAdapter');
+const { createBullBoard } = require('@bull-board/api');
+const { ExpressAdapter } = require('@bull-board/express');
+const Queue = require('bull');
+const path = require('path');
 
 app.use(express.json());
 app.use(cors())
 
-const users = [
-    { id: 1, name: 'John' },
-    { id: 2, name: 'Alice' },
-    { id: 3, name: 'Bob' },
-    //
-  ];
-  
-  // GET endpoint to return users
-  app.get('/api/users', (req, res) => {
-    res.json(users);
-  });
-
-//   POST Request send mail
-
-app.post('/api/send', async (req, res) => {
-
-    const { name, email } = req.body;
-
-   
 
 
- var transport = nodemailer.createTransport({
-      host: 'mail.ireoluwayimika.online',
-      port: 465,
-      auth: {
-        user: 'invites@ireoluwayimika.online',
-        pass: 'BOBson246**'
-      }
-    });
+// Redis connection
+const emailQueue = new Queue('emailQueue', {
+  redis: {
+    host: 'oregon-redis.render.com',
+    port: 6379,
+    username: 'red-cs7ntsij1k6c73fk9qc0',
+    password: 'he3tWxb8WRKnTuQ2IC3RLecK0AA7Igsz',
+    tls: {
+      rejectUnauthorized: false // Set this based on your security needs
+    }
+  }
+});
+
+// Test the connection
+emailQueue.on('error', (error) => {
+  console.error('Queue Error:', error);
+});
+
+emailQueue.on('ready', () => {
+  console.log('Queue is ready');
+});
+
+// Create the Bull Board
+const serverAdapter = new ExpressAdapter();
+createBullBoard({
+  queues: [new BullAdapter(emailQueue)],
+  serverAdapter,
+});
+
+
+app.use('/admin/queues', serverAdapter.getRouter());
+
+// Mail transporter configuration
+
+
+var transport = nodemailer.createTransport({
+  host: 'mail.ireoluwayimika.online',
+  port: 465,
+  auth: {
+    user: 'invites@ireoluwayimika.online',
+    pass: 'BOBson246**'
+  }
+});
+
+
+
+
+// Process jobs in the queue
+emailQueue.process(async (job) => {
+  const { name, email } = job.data;
 
   let mailOptions = {
     from: 'invites@ireoluwayimika.online',
@@ -284,18 +312,72 @@ app.post('/api/send', async (req, res) => {
   ]
   };
 
-  // i have added new to mainbackend
+  try {
+    await transport.sendMail(mailOptions);
+    console.log(`Email sent to ${email}`);
+  } catch (error) {
+    console.error(`Error sending email to ${email}:`, error);
+    throw error;
+  }
+});
+
+
+const users = [
+    { id: 1, name: 'John' },
+    { id: 2, name: 'Alice' },
+    { id: 3, name: 'Bob' },
+    //
+  ];
+  
+  // GET endpoint to return users
+  app.get('/api/users', (req, res) => {
+    res.json(users);
+  });
+
+// Health check for Redis
+app.get('/api/redis-health', async (req, res) => {
+  try {
+    // Perform a simple Redis operation
+    await emailQueue.client.set('health-check', 'OK');
+    const value = await emailQueue.client.get('health-check');
+    
+    if (value === 'OK') {
+      res.status(200).json({ message: 'Redis is working' });
+    } else {
+      res.status(500).json({ message: 'Redis is not responding correctly' });
+    }
+  } catch (error) {
+    res.status(500).json({ message: 'Redis connection failed', error: error.message });
+  }
+});
+
+
+app.post('/api/next', async (req, res) => {
+  const { email } = req.body;
+
 
   try {
-    let info = await transport.sendMail(mailOptions);
-    console.log('Message sent: %s', info.messageId);
+    await emailQueue.add({ email });
+    res.status(200).json({ message: 'Email job added to the queue' });
   } catch (error) {
-    console.error('Error sending email:', error);
+    res.status(500).json({ message: 'Failed to add email job to the queue', error: error.message });
   }
+});
+  
+
+//   POST Request send mail
+
+app.post('/api/send', async (req, res) => {
+
+    const { name, email } = req.body;
 
 
-
-res.status(200).json({ message: 'Working' });
+    try {
+      await emailQueue.add({ name, email });
+      res.status(200).json({ message: 'Email job added to the queue' });
+    } catch (error) {
+      res.status(500).json({ message: 'Failed to add email job to the queue', error: error.message });
+    }
 
 
 
